@@ -8,6 +8,8 @@ export default function Home() {
   const [dotaz, setDotaz] = useState("");
   // Výsledek rešerše (odpověď od Claude)
   const [vysledek, setVysledek] = useState("");
+  // Kroky, které agent při rešerši udělal (hledání, hodnocení zdrojů…)
+  const [kroky, setKroky] = useState([]);
   // Případná chyba (např. chybějící klíč, výpadek API)
   const [chyba, setChyba] = useState("");
   // Informace o tom, že aplikace pracuje
@@ -17,6 +19,7 @@ export default function Home() {
     if (!dotaz.trim()) return;
     setPracuje(true);
     setVysledek("");
+    setKroky([]);
     setChyba("");
 
     try {
@@ -34,6 +37,7 @@ export default function Home() {
         setChyba(data.error || "Něco se pokazilo, zkus to prosím znovu.");
       } else {
         setVysledek(data.text);
+        setKroky(data.kroky || []);
       }
     } catch {
       setChyba("Nepodařilo se spojit se serverem. Zkus to prosím znovu.");
@@ -67,6 +71,23 @@ export default function Home() {
           {pracuje ? "Pracuji…" : "Spustit rešerši"}
         </button>
       </div>
+
+      {pracuje && (
+        <p className={styles.popis}>
+          Agent prohledává web a hodnotí zdroje, může to trvat i minutu…
+        </p>
+      )}
+
+      {kroky.length > 0 && (
+        <div className={styles.kroky}>
+          <h2>Jak agent postupoval</h2>
+          <ol>
+            {kroky.map((krok, i) => (
+              <li key={i}>{krok}</li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       {chyba && (
         <div className={styles.vysledek}>

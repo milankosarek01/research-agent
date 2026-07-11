@@ -55,6 +55,25 @@
   cursor: not-allowed;
 }
 
+.kroky {
+  padding: 16px 24px;
+  margin-bottom: 20px;
+  background: #fffbeb;
+  border: 1px solid #f0e2b6;
+  border-radius: 12px;
+  line-height: 1.7;
+  font-size: 0.95rem;
+}
+
+.kroky h2 {
+  font-size: 1rem;
+  margin-bottom: 8px;
+}
+
+.kroky ol {
+  padding-left: 20px;
+}
+
 .vysledek {
   padding: 20px 24px;
   background: #f5f7fa;
@@ -82,5 +101,10 @@
   .vysledek {
     background: #16181d;
     border-color: #2c313a;
+  }
+
+  .kroky {
+    background: #1d1a12;
+    border-color: #3d3520;
   }
 }
