@@ -29,10 +29,12 @@ nikdy neodpovídej, že rešerši nelze dokončit, a nepokládej uživateli otá
 const TOOLS = [
   // 1) web_search – SERVEROVÝ nástroj: vyhledávání provádí přímo Anthropic,
   //    my nic neimplementujeme. max_uses omezuje počet hledání (a tím i cenu).
+  //    Používáme základní verzi – je rychlá a nevyžaduje běhové prostředí
+  //    (container), takže se rešerše vejde do časového limitu na Vercelu.
   {
-    type: "web_search_20260209",
+    type: "web_search_20250305",
     name: "web_search",
-    max_uses: 5,
+    max_uses: 4,
   },
   // 2) ohodnot_zdroj – NÁŠ VLASTNÍ nástroj: model si o něj řekne,
   //    ale kód spouštíme my (funkce ohodnotZdroj níže).
@@ -100,9 +102,7 @@ function ohodnotZdroj(url) {
 }
 
 // Jedno volání Claude API přes fetch (bez wrapperu, jako v minulých fázích).
-// containerId: web_search interně běží v "containeru" (izolovaném prostředí
-// u Anthropicu) – při pokračování konverzace musíme jeho ID poslat zpět.
-async function zavolejClaude(messages, containerId) {
+async function zavolejClaude(messages) {
   const odpoved = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -116,7 +116,6 @@ async function zavolejClaude(messages, containerId) {
       system: SYSTEM_PROMPT,
       tools: TOOLS,
       messages,
-      ...(containerId ? { container: containerId } : {}),
     }),
   });
 
@@ -149,15 +148,12 @@ export async function POST(request) {
   // ID bloků, které jsme už zapsali – po pause_turn může API vrátit
   // i části odpovědi, které už jsme viděli, a nechceme kroky počítat dvakrát
   const zapsaneBloky = new Set();
-  // ID containeru, ve kterém běží vyhledávání – dostaneme ho v první odpovědi
-  let containerId = null;
 
   try {
     // ===== AGENTNÍ SMYČKA =====
     // Točíme se, dokud agent nepřestane volat nástroje (max 10 kol pro jistotu).
     for (let kolo = 0; kolo < 10; kolo++) {
-      const data = await zavolejClaude(messages, containerId);
-      if (data.container?.id) containerId = data.container.id;
+      const data = await zavolejClaude(messages);
 
       // Projdeme obsah odpovědi a zapíšeme, co agent právě udělal
       for (const blok of data.content) {
