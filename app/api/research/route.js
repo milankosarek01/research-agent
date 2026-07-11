@@ -22,9 +22,10 @@ Postupuj takto:
    Máš NEJVÝŠE 4 vyhledávání – každé použij na jinak formulovaný dotaz,
    nikdy neopakuj stejný. Obvykle stačí 2–3 hledání, pak přestaň hledat.
 2. Každý důležitý zdroj, ze kterého čerpáš, ohodnoť nástrojem ohodnot_zdroj.
-3. Až budeš mít dost podkladů, NEPIŠ souhrn sám. Místo toho zavolej nástroj
-   predej_shrnovaci a předej do něj všechny nasbírané zdroje (název, URL,
-   hodnocení důvěryhodnosti a nejdůležitější fakta z každého zdroje).
+3. Až budeš mít dost podkladů, NIKDY nepiš souhrn jako běžný text. Tvým
+   ÚPLNĚ POSLEDNÍM krokem je VŽDY volání nástroje predej_shrnovaci, do kterého
+   předáš všechny nasbírané zdroje (název, URL, hodnocení důvěryhodnosti
+   a nejdůležitější fakta z každého zdroje).
    Tím práci předáš druhému agentovi (Shrnovači), který napíše finální souhrn.
 
 Sám se rozhoduješ, kdy hledat dál a kdy už máš dost. Pokud narazíš na limit
@@ -188,13 +189,13 @@ async function zavolejClaude(messages, system, tools) {
 
 // ---------- AGENT 2 (Shrnovač) jako samostatná funkce ----------
 // Dostane zdroje nasbírané Rešeršistou a vrátí finální souhrn (text).
-async function spustShrnovace(dotaz, zdroje) {
+async function spustShrnovace(dotaz, podklady) {
   const system = SHRNOVAC_ZAKLAD + "\n\n" + nactiSkill();
 
   const vstup =
     `Uživatel se ptal: "${dotaz}".\n\n` +
-    `Rešeršista ti předal tyto zdroje (jako JSON):\n` +
-    JSON.stringify(zdroje, null, 2) +
+    `Rešeršista ti předal tyto podklady:\n` +
+    podklady +
     `\n\nNapiš finální shrnutí podle pravidel formátu.`;
 
   const data = await zavolejClaude(
@@ -226,6 +227,8 @@ export async function POST(request) {
   const messages = [{ role: "user", content: dotaz }];
   // Záznam kroků agentů – pošleme ho do prohlížeče, ať je práce vidět
   const kroky = [];
+  // Kolik zdrojů Rešeršista ohodnotil – použijeme v hlášce o předání
+  let pocetZdroju = 0;
   // ID bloků, které jsme už zapsali – po pause_turn může API vrátit i části,
   // které už jsme viděli, a nechceme kroky počítat dvakrát
   const zapsaneBloky = new Set();
@@ -254,6 +257,7 @@ export async function POST(request) {
           kroky.push(`📄 Nalezeno ${blok.content.length} výsledků`);
         }
         if (blok.type === "tool_use" && blok.name === "ohodnot_zdroj") {
+          pocetZdroju++;
           kroky.push(`⚖️ Hodnotím zdroj: ${blok.input.url}`);
         }
       }
@@ -273,7 +277,7 @@ export async function POST(request) {
           );
 
           // Druhý agent napíše finální souhrn z předaných zdrojů
-          const text = await spustShrnovace(dotaz, zdroje);
+          const text = await spustShrnovace(dotaz, JSON.stringify(zdroje, null, 2));
           kroky.push("✍️ Shrnovač napsal finální souhrn");
           return Response.json({ text, kroky });
         }
@@ -302,13 +306,19 @@ export async function POST(request) {
         continue;
       }
 
-      // Rešeršista skončil bez předání (např. jen napsal text) → vrátíme ho.
-      // Pojistka pro případ, že by model nezavolal predej_shrnovaci.
-      const text = data.content
+      // Rešeršista skončil, aniž by zavolal predej_shrnovaci (model občas
+      // rovnou napíše text). I tak práci PŘEDÁME Shrnovači – aby byl handoff
+      // vždy vidět a finální souhrn vždy prošel pravidly ze SKILL.md.
+      const podklady = data.content
         .filter((blok) => blok.type === "text")
         .map((blok) => blok.text)
         .join("");
 
+      kroky.push(
+        `🤝 Rešeršista našel ${pocetZdroju} zdrojů → předávám Shrnovači`
+      );
+      const text = await spustShrnovace(dotaz, podklady);
+      kroky.push("✍️ Shrnovač napsal finální souhrn");
       return Response.json({ text, kroky });
     }
 
