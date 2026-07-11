@@ -87,9 +87,94 @@
   margin-bottom: 10px;
 }
 
+.historie {
+  margin-top: 32px;
+}
+
+.historieHlavicka {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.historieHlavicka h2 {
+  font-size: 1.1rem;
+}
+
+.smazat {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  color: #b02a37;
+  background: transparent;
+  border: 1px solid #e0b4b9;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.smazat:hover {
+  background: #fbeaec;
+}
+
+.historie ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.polozkaHistorie {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f5f7fa;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.polozkaHistorie:hover {
+  border-color: #0070f3;
+}
+
+.polozkaDotaz {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polozkaDatum {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  color: #888;
+}
+
 @media (prefers-color-scheme: dark) {
   .popis {
     color: #aaa;
+  }
+
+  .polozkaHistorie {
+    background: #16181d;
+    border-color: #2c313a;
+  }
+
+  .polozkaDatum {
+    color: #999;
+  }
+
+  .smazat {
+    color: #e88;
+    border-color: #5a2a30;
+  }
+
+  .smazat:hover {
+    background: #2a1a1c;
   }
 
   .pole {
