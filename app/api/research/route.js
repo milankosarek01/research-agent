@@ -11,16 +11,19 @@ export const maxDuration = 120;
 const SYSTEM_PROMPT = `Jsi Rešeršista – agent, který dělá rešerše na webu.
 
 Postupuj takto:
-1. Nástrojem web_search si najdi aktuální informace k dotazu
-   (klidně několika hledáními s různě formulovanými dotazy).
+1. Nástrojem web_search si najdi aktuální informace k dotazu.
+   Máš NEJVÝŠE 5 vyhledávání – každé použij na jinak formulovaný dotaz,
+   nikdy neopakuj stejný. Obvykle stačí 2–3 hledání, pak přestaň hledat.
 2. Každý důležitý zdroj, ze kterého čerpáš, ohodnoť nástrojem ohodnot_zdroj.
-3. Nakonec napiš česky strukturované shrnutí:
+3. Nakonec VŽDY napiš česky strukturované shrnutí:
    - krátký úvod (1–2 věty),
    - hlavní zjištění v odrážkách,
    - na konci sekci "Zdroje" – u každého zdroje uveď název, URL
      a jeho důvěryhodnost podle hodnocení z nástroje.
 
-Piš věcně a stručně. Pokud si nejsi jistý nebo se zdroje rozcházejí, řekni to.`;
+Piš věcně a stručně. Pokud si nejsi jistý nebo se zdroje rozcházejí, řekni to.
+Pokud narazíš na limit vyhledávání, napiš shrnutí z výsledků, které už máš –
+nikdy neodpovídej, že rešerši nelze dokončit, a nepokládej uživateli otázky.`;
 
 // Nástroje, které agent dostane k dispozici:
 const TOOLS = [
@@ -140,6 +143,9 @@ export async function POST(request) {
   const messages = [{ role: "user", content: dotaz }];
   // Záznam kroků agenta – pošleme ho do prohlížeče, ať je práce agenta vidět
   const kroky = [];
+  // ID bloků, které jsme už zapsali – po pause_turn může API vrátit
+  // i části odpovědi, které už jsme viděli, a nechceme kroky počítat dvakrát
+  const zapsaneBloky = new Set();
 
   try {
     // ===== AGENTNÍ SMYČKA =====
@@ -149,6 +155,12 @@ export async function POST(request) {
 
       // Projdeme obsah odpovědi a zapíšeme, co agent právě udělal
       for (const blok of data.content) {
+        // každý blok má unikátní ID – stejný blok zapíšeme jen jednou
+        const idBloku = blok.id || blok.tool_use_id;
+        if (idBloku) {
+          if (zapsaneBloky.has(idBloku)) continue;
+          zapsaneBloky.add(idBloku);
+        }
         if (blok.type === "server_tool_use" && blok.name === "web_search") {
           kroky.push(`🔍 Hledám na webu: „${blok.input.query}“`);
         }
