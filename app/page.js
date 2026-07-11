@@ -6,8 +6,10 @@ import styles from "./page.module.css";
 export default function Home() {
   // Text, který uživatel napíše do pole
   const [dotaz, setDotaz] = useState("");
-  // Výsledek rešerše (zatím jen ukázkový text, napojení na Claude přijde ve Fázi 2)
+  // Výsledek rešerše (odpověď od Claude)
   const [vysledek, setVysledek] = useState("");
+  // Případná chyba (např. chybějící klíč, výpadek API)
+  const [chyba, setChyba] = useState("");
   // Informace o tom, že aplikace pracuje
   const [pracuje, setPracuje] = useState(false);
 
@@ -15,14 +17,29 @@ export default function Home() {
     if (!dotaz.trim()) return;
     setPracuje(true);
     setVysledek("");
+    setChyba("");
 
-    // Zatím jen simulace – ve Fázi 2 sem přijde volání serveru s Claude API
-    setTimeout(() => {
-      setVysledek(
-        `Zatím jen kostra aplikace. Tady se ve Fázi 2 objeví odpověď na dotaz: „${dotaz}“`
-      );
+    try {
+      // Zavoláme naši serverovou routu – ta teprve mluví s Claude API
+      // (klíč tak zůstává schovaný na serveru)
+      const odpoved = await fetch("/api/research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dotaz }),
+      });
+
+      const data = await odpoved.json();
+
+      if (!odpoved.ok) {
+        setChyba(data.error || "Něco se pokazilo, zkus to prosím znovu.");
+      } else {
+        setVysledek(data.text);
+      }
+    } catch {
+      setChyba("Nepodařilo se spojit se serverem. Zkus to prosím znovu.");
+    } finally {
       setPracuje(false);
-    }, 500);
+    }
   }
 
   return (
@@ -51,10 +68,17 @@ export default function Home() {
         </button>
       </div>
 
+      {chyba && (
+        <div className={styles.vysledek}>
+          <h2>Chyba</h2>
+          <p>{chyba}</p>
+        </div>
+      )}
+
       {vysledek && (
         <div className={styles.vysledek}>
           <h2>Výsledek</h2>
-          <p>{vysledek}</p>
+          <p style={{ whiteSpace: "pre-wrap" }}>{vysledek}</p>
         </div>
       )}
     </main>
