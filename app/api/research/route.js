@@ -1,43 +1,45 @@
 // Serverová API route – běží jen na serveru (Vercel), takže API klíč
 // nikdy neopustí server a uživatel v prohlížeči ho nevidí.
 
+import fs from "node:fs";
+import path from "node:path";
+
 // Vercel: agent s vyhledáváním potřebuje víc času než obyčejná odpověď
 export const maxDuration = 120;
 
-// FÁZE 3: z jednoduchého asistenta se stal AGENT "Rešeršista".
-// Agent = model, který má k dispozici NÁSTROJE a sám se rozhoduje,
-// kdy a jak je použít. Jeho práci řídíme ve smyčce ve funkci POST níže.
+// FÁZE 4: máme DVA agenty a mezi nimi PŘEDÁNÍ (handoff).
+//   1) Rešeršista – hledá na webu a hodnotí zdroje. Sám se ve smyčce rozhodne,
+//      kdy má dost zdrojů, a nástrojem "predej_shrnovaci" je předá dál.
+//   2) Shrnovač   – dostane nasbírané zdroje a napíše finální strukturovaný souhrn.
+// FÁZE 5: Shrnovač si do svého system promptu načítá pravidla ze souboru SKILL.md.
 
-const SYSTEM_PROMPT = `Jsi Rešeršista – agent, který dělá rešerše na webu.
+// ---------- AGENT 1: REŠERŠISTA ----------
+
+const SYSTEM_PROMPT_RESERSISTA = `Jsi Rešeršista – agent, který sbírá podklady na webu.
 
 Postupuj takto:
 1. Nástrojem web_search si najdi aktuální informace k dotazu.
-   Máš NEJVÝŠE 5 vyhledávání – každé použij na jinak formulovaný dotaz,
+   Máš NEJVÝŠE 4 vyhledávání – každé použij na jinak formulovaný dotaz,
    nikdy neopakuj stejný. Obvykle stačí 2–3 hledání, pak přestaň hledat.
 2. Každý důležitý zdroj, ze kterého čerpáš, ohodnoť nástrojem ohodnot_zdroj.
-3. Nakonec VŽDY napiš česky strukturované shrnutí:
-   - krátký úvod (1–2 věty),
-   - hlavní zjištění v odrážkách,
-   - na konci sekci "Zdroje" – u každého zdroje uveď název, URL
-     a jeho důvěryhodnost podle hodnocení z nástroje.
+3. Až budeš mít dost podkladů, NEPIŠ souhrn sám. Místo toho zavolej nástroj
+   predej_shrnovaci a předej do něj všechny nasbírané zdroje (název, URL,
+   hodnocení důvěryhodnosti a nejdůležitější fakta z každého zdroje).
+   Tím práci předáš druhému agentovi (Shrnovači), který napíše finální souhrn.
 
-Piš věcně a stručně. Pokud si nejsi jistý nebo se zdroje rozcházejí, řekni to.
-Pokud narazíš na limit vyhledávání, napiš shrnutí z výsledků, které už máš –
-nikdy neodpovídej, že rešerši nelze dokončit, a nepokládej uživateli otázky.`;
+Sám se rozhoduješ, kdy hledat dál a kdy už máš dost. Pokud narazíš na limit
+vyhledávání, rovnou předej to, co máš – nikdy neodpovídej, že rešerši nelze
+dokončit, a nepokládej uživateli otázky.`;
 
-// Nástroje, které agent dostane k dispozici:
-const TOOLS = [
+const TOOLS_RESERSISTA = [
   // 1) web_search – SERVEROVÝ nástroj: vyhledávání provádí přímo Anthropic,
   //    my nic neimplementujeme. max_uses omezuje počet hledání (a tím i cenu).
-  //    Používáme základní verzi – je rychlá a nevyžaduje běhové prostředí
-  //    (container), takže se rešerše vejde do časového limitu na Vercelu.
   {
     type: "web_search_20250305",
     name: "web_search",
     max_uses: 4,
   },
-  // 2) ohodnot_zdroj – NÁŠ VLASTNÍ nástroj: model si o něj řekne,
-  //    ale kód spouštíme my (funkce ohodnotZdroj níže).
+  // 2) ohodnot_zdroj – NÁŠ VLASTNÍ nástroj: model si o něj řekne, kód spouštíme my.
   {
     name: "ohodnot_zdroj",
     description:
@@ -51,10 +53,63 @@ const TOOLS = [
       required: ["url"],
     },
   },
+  // 3) predej_shrnovaci – VLASTNÍ nástroj pro PŘEDÁNÍ práce druhému agentovi.
+  //    Když ho model zavolá, smyčka Rešeršisty končí a jeho vstup (zdroje)
+  //    pošleme Shrnovači. Tohle je viditelný handoff v kódu.
+  {
+    name: "predej_shrnovaci",
+    description:
+      "Předá nasbírané zdroje agentovi Shrnovači, který napíše finální souhrn. " +
+      "Zavolej, až budeš mít dost podkladů. Poté už nic dalšího nedělej.",
+    input_schema: {
+      type: "object",
+      properties: {
+        zdroje: {
+          type: "array",
+          description: "Seznam nasbíraných zdrojů, ze kterých se má napsat souhrn.",
+          items: {
+            type: "object",
+            properties: {
+              nazev: { type: "string", description: "Název / titulek zdroje" },
+              url: { type: "string", description: "URL adresa zdroje" },
+              duveryhodnost: {
+                type: "string",
+                description: "Hodnocení z nástroje ohodnot_zdroj (vysoká/střední/nízká)",
+              },
+              fakta: {
+                type: "string",
+                description: "Nejdůležitější fakta z tohoto zdroje k tématu",
+              },
+            },
+            required: ["nazev", "url", "fakta"],
+          },
+        },
+      },
+      required: ["zdroje"],
+    },
+  },
 ];
 
-// Implementace našeho nástroje: jednoduché hodnocení podle domény.
-// (Pro case study stačí heuristika – ukazuje princip vlastního nástroje.)
+// ---------- AGENT 2: SHRNOVAČ ----------
+
+// Základ system promptu Shrnovače. Pravidla pro formát doplníme ze SKILL.md níže.
+const SHRNOVAC_ZAKLAD = `Jsi Shrnovač – agent, který z předaných zdrojů napíše
+finální shrnutí pro uživatele. Zdroje ti předal Rešeršista, ty už na web nechodíš.
+Řiď se přesně následujícími pravidly formátu.`;
+
+// FÁZE 5: načteme obsah SKILL.md a vložíme ho do system promptu Shrnovače.
+// Tím se pravidla ze skillu reálně dostanou do promptu agenta a projeví se na výstupu.
+function nactiSkill() {
+  try {
+    const cesta = path.join(process.cwd(), "SKILL.md");
+    return fs.readFileSync(cesta, "utf8");
+  } catch {
+    // Kdyby soubor chyběl, radši pokračuj bez pádu – jen bez extra pravidel.
+    return "";
+  }
+}
+
+// Implementace našeho nástroje ohodnot_zdroj: jednoduché hodnocení podle domény.
 function ohodnotZdroj(url) {
   let domena;
   try {
@@ -102,7 +157,16 @@ function ohodnotZdroj(url) {
 }
 
 // Jedno volání Claude API přes fetch (bez wrapperu, jako v minulých fázích).
-async function zavolejClaude(messages) {
+// system a tools předáváme jako parametry, protože každý agent má svoje.
+async function zavolejClaude(messages, system, tools) {
+  const telo = {
+    model: "claude-sonnet-5",
+    max_tokens: 8000,
+    system,
+    messages,
+  };
+  if (tools) telo.tools = tools;
+
   const odpoved = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -110,13 +174,7 @@ async function zavolejClaude(messages) {
       "x-api-key": process.env.ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify({
-      model: "claude-sonnet-5",
-      max_tokens: 8000,
-      system: SYSTEM_PROMPT,
-      tools: TOOLS,
-      messages,
-    }),
+    body: JSON.stringify(telo),
   });
 
   if (!odpoved.ok) {
@@ -126,6 +184,29 @@ async function zavolejClaude(messages) {
     );
   }
   return odpoved.json();
+}
+
+// ---------- AGENT 2 (Shrnovač) jako samostatná funkce ----------
+// Dostane zdroje nasbírané Rešeršistou a vrátí finální souhrn (text).
+async function spustShrnovace(dotaz, zdroje) {
+  const system = SHRNOVAC_ZAKLAD + "\n\n" + nactiSkill();
+
+  const vstup =
+    `Uživatel se ptal: "${dotaz}".\n\n` +
+    `Rešeršista ti předal tyto zdroje (jako JSON):\n` +
+    JSON.stringify(zdroje, null, 2) +
+    `\n\nNapiš finální shrnutí podle pravidel formátu.`;
+
+  const data = await zavolejClaude(
+    [{ role: "user", content: vstup }],
+    system,
+    null // Shrnovač už žádné nástroje nepotřebuje
+  );
+
+  return data.content
+    .filter((blok) => blok.type === "text")
+    .map((blok) => blok.text)
+    .join("");
 }
 
 export async function POST(request) {
@@ -141,23 +222,26 @@ export async function POST(request) {
     );
   }
 
-  // Historie konverzace mezi námi a agentem – začíná dotazem uživatele
+  // Historie konverzace mezi námi a Rešeršistou – začíná dotazem uživatele
   const messages = [{ role: "user", content: dotaz }];
-  // Záznam kroků agenta – pošleme ho do prohlížeče, ať je práce agenta vidět
+  // Záznam kroků agentů – pošleme ho do prohlížeče, ať je práce vidět
   const kroky = [];
-  // ID bloků, které jsme už zapsali – po pause_turn může API vrátit
-  // i části odpovědi, které už jsme viděli, a nechceme kroky počítat dvakrát
+  // ID bloků, které jsme už zapsali – po pause_turn může API vrátit i části,
+  // které už jsme viděli, a nechceme kroky počítat dvakrát
   const zapsaneBloky = new Set();
 
   try {
-    // ===== AGENTNÍ SMYČKA =====
-    // Točíme se, dokud agent nepřestane volat nástroje (max 10 kol pro jistotu).
+    // ===== AGENTNÍ SMYČKA REŠERŠISTY =====
+    // Točíme se, dokud Rešeršista nepředá práci (predej_shrnovaci) – max 10 kol.
     for (let kolo = 0; kolo < 10; kolo++) {
-      const data = await zavolejClaude(messages);
+      const data = await zavolejClaude(
+        messages,
+        SYSTEM_PROMPT_RESERSISTA,
+        TOOLS_RESERSISTA
+      );
 
       // Projdeme obsah odpovědi a zapíšeme, co agent právě udělal
       for (const blok of data.content) {
-        // každý blok má unikátní ID – stejný blok zapíšeme jen jednou
         const idBloku = blok.id || blok.tool_use_id;
         if (idBloku) {
           if (zapsaneBloky.has(idBloku)) continue;
@@ -174,35 +258,52 @@ export async function POST(request) {
         }
       }
 
-      // a) Agent volá NÁŠ nástroj → spustíme ho a výsledek pošleme zpět
+      // Rešeršista o něco žádá přes nástroj(e)?
       if (data.stop_reason === "tool_use") {
-        // Odpověď agenta (včetně žádostí o nástroje) patří do historie
+        // ===== PŘEDÁNÍ (HANDOFF) mezi agenty =====
+        // Pokud mezi žádostmi je predej_shrnovaci, končíme s Rešeršistou
+        // a spustíme druhého agenta – Shrnovače.
+        const predani = data.content.find(
+          (blok) => blok.type === "tool_use" && blok.name === "predej_shrnovaci"
+        );
+        if (predani) {
+          const zdroje = predani.input.zdroje || [];
+          kroky.push(
+            `🤝 Rešeršista našel ${zdroje.length} zdrojů → předávám Shrnovači`
+          );
+
+          // Druhý agent napíše finální souhrn z předaných zdrojů
+          const text = await spustShrnovace(dotaz, zdroje);
+          kroky.push("✍️ Shrnovač napsal finální souhrn");
+          return Response.json({ text, kroky });
+        }
+
+        // Jinak jde o náš nástroj ohodnot_zdroj – spustíme a pošleme výsledek zpět
         messages.push({ role: "assistant", content: data.content });
 
-        // Spustíme každý požadovaný nástroj a posbíráme výsledky
         const vysledkyNastroju = data.content
           .filter((blok) => blok.type === "tool_use")
           .map((blok) => ({
             type: "tool_result",
-            tool_use_id: blok.id, // musí sedět s ID žádosti
+            tool_use_id: blok.id,
             content:
               blok.name === "ohodnot_zdroj"
                 ? ohodnotZdroj(blok.input.url)
                 : "Neznámý nástroj.",
           }));
 
-        // Výsledky nástrojů se posílají jako zpráva od uživatele
         messages.push({ role: "user", content: vysledkyNastroju });
         continue; // další kolo smyčky
       }
 
-      // b) Serverové vyhledávání se přerušilo v půlce → pošleme dál, ať pokračuje
+      // Serverové vyhledávání se přerušilo v půlce → pošleme dál, ať pokračuje
       if (data.stop_reason === "pause_turn") {
         messages.push({ role: "assistant", content: data.content });
         continue;
       }
 
-      // c) Agent skončil → vytáhneme finální text a vrátíme ho
+      // Rešeršista skončil bez předání (např. jen napsal text) → vrátíme ho.
+      // Pojistka pro případ, že by model nezavolal predej_shrnovaci.
       const text = data.content
         .filter((blok) => blok.type === "text")
         .map((blok) => blok.text)
